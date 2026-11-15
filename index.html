@@ -659,10 +659,10 @@
     const SELL_BASE = { carrot:12, tomato:18, corn:22, egg:8, wool:30, melon:30 };
 
     const S = {
-      started:false, coins:120, stars:0, level:1,
+      started:false, coins:100, stars:0, level:1,
       happiness:82, hunger:75,
       seeds:{ carrot:2, tomato:1, corn:1, melon:0 },
-      bag:{ carrot:0, tomato:0, corn:0, egg:0, wool:0, melon:0 },
+      bag:{ carrot:0, tomato:0, corn:0, egg:0, wool:0, melon:0, feed:0, snackBerry:0, snackCookie:0 },
       bank:0, bankInterestTotal:0,
       prices:{ carrot:12, tomato:18, corn:22, egg:8, wool:30, melon:30 },
       prevPrices:{ carrot:12, tomato:18, corn:22, egg:8, wool:30, melon:30 },
@@ -854,7 +854,7 @@
       cyl(0.04, 0.04, 0.35, 0xff9f2e, 0.18, 0.18, 0, g);
       cyl(0.04, 0.04, 0.35, 0xff9f2e, -0.18, 0.18, 0, g);
       const a = { kind:"chicken", group:g, head:headG, area:{ x1:-16, x2:-6.4, z1:-10.6, z2:-3.6 },
-                  target:new THREE.Vector3(x, 0, z), speed:rand(1.1, 1.6), state:"pause", timer:rand(0.5, 2), peckT:0, hopT:0 };
+                  target:new THREE.Vector3(x, 0, z), speed:rand(1.1, 1.6), state:"pause", timer:rand(0.5, 2), peckT:0, hopT:0, feedCount:2, growth:1 };
       animals.push(a);
       registerInteractive(g, "chicken", a, [hitBox(1.9, 2, 1.9, g)]);
       return a;
@@ -876,9 +876,79 @@
       [[0.35, 0.4], [-0.35, 0.4], [0.35, -0.45], [-0.35, -0.45]].forEach(p => cyl(0.07, 0.07, 0.6, 0x5a5148, p[0], 0.3, p[1], g));
       const a = { kind:"sheep", group:g, head:headG, wool:wool, woolScale:1,
                   area:{ x1:6.4, x2:15.6, z1:-10.6, z2:-3.6 },
-                  target:new THREE.Vector3(x, 0, z), speed:rand(0.7, 1.0), state:"pause", timer:rand(1, 3), peckT:0, hopT:0 };
+                  target:new THREE.Vector3(x, 0, z), speed:rand(0.7, 1.0), state:"pause", timer:rand(1, 3), peckT:0, hopT:0, feedCount:2, growth:1 };
       animals.push(a);
       registerInteractive(g, "sheep", a, [hitBox(2.4, 2.4, 2.4, g)]);
+      return a;
+    }
+    /* ---- 동물 성장(3단계) · 아기 번식 · 토끼 ---- */
+    const GROWTH_SCALE = [0.75, 1.0, 1.3];
+    function growthStage(a){ return (a.feedCount || 0) >= 5 ? 2 : ((a.feedCount || 0) >= 2 ? 1 : 0); }
+    function applyGrowthScale(a){ if(!a) return; a.growth = growthStage(a); a.group.scale.setScalar(GROWTH_SCALE[a.growth]); }
+    function growthFeed(a){
+      if(!a) return;
+      const before = growthStage(a);
+      a.feedCount = (a.feedCount || 0) + 1;
+      applyGrowthScale(a);
+      a.hopT = 0.6;
+      if(a.growth > before){
+        const nm = a.kind === "chicken" ? "닭" : (a.kind === "sheep" ? "양" : "토끼");
+        toast("🎉 " + nm + "이(가) 쑥쑥 컸어요! (" + (a.growth + 1) + "단계)");
+        floater("🌟");
+        if(window.EF && EF.onGrowthChange) EF.onGrowthChange();
+      }
+    }
+    function feedOneWithItem(a){
+      if(!a) return;
+      if((S.bag.feed || 0) <= 0){ toast("🍚 먹이가 없어요! 편의점에서 동물 밥을 사 오세요 🏪"); return; }
+      S.bag.feed--;
+      growthFeed(a); addHappiness(8); addHunger(4);
+      const nm = a.kind === "chicken" ? "닭" : (a.kind === "sheep" ? "양" : "토끼");
+      toast("🍚 " + nm + "이(가) 밥을 맛있게 먹어요! 냠냠");
+      floater("🍚"); updateHUD();
+      if(window.EF) EF.afterAction("feedItem", { kind:a.kind });
+    }
+    function eatSnack(k){
+      if((S.bag[k] || 0) <= 0) return;
+      S.bag[k]--;
+      if(k === "snackBerry"){ addHappiness(8); addHunger(6); toast("🍓 딸기 간식 냠냠! 행복 +8"); }
+      else if(k === "snackCookie"){ addHappiness(6); addHunger(8); toast("🍪 쿠키 간식 냠냠! 배고픔 +8"); }
+      floater("😋"); updateHUD();
+      if(window.EF) EF.afterAction("snack", { kind:k });
+    }
+    function spawnBaby(kind, parent){
+      if(!parent) return null;
+      const count = animals.filter(a => a.kind === kind).length;
+      if(count >= 8){ toast("🐣 동물이 너무 많아요! (최대 8마리)"); return null; }
+      const px = parent.group.position.x + rand(-1.5, 1.5), pz = parent.group.position.z + rand(-1.5, 1.5);
+      let b = null;
+      if(kind === "chicken") b = buildChicken(px, pz, 0xfff6e0);
+      else if(kind === "sheep") b = buildSheep(px, pz);
+      else if(kind === "rabbit") b = buildRabbit(px, pz);
+      if(!b) return null;
+      b.isBaby = true; b.feedCount = 0; applyGrowthScale(b);
+      toast("🐣 아기 " + (kind === "chicken" ? "병아리" : (kind === "sheep" ? "아기 양" : "아기 토끼")) + "가 태어났어요! 밥을 주면 쑥쑥 커요!");
+      floater("🐣");
+      if(window.EF) EF.afterAction("baby", { kind:kind });
+      return b;
+    }
+    function buildRabbit(x, z){
+      const g = new THREE.Group(); g.position.set(x, 0, z); scene.add(g);
+      const body = sph(0.5, 0xffffff, 0, 0.55, 0, g); body.scale.set(1, 0.9, 1.2);
+      const headG = new THREE.Group(); headG.position.set(0, 0.95, 0.4); g.add(headG);
+      sph(0.32, 0xffffff, 0, 0.1, 0.05, headG);
+      box(0.12, 0.55, 0.12, 0xffffff, 0.14, 0.55, 0, headG);
+      box(0.12, 0.55, 0.12, 0xffffff, -0.14, 0.55, 0, headG);
+      sph(0.09, 0xff9ecb, 0.14, 0.55, 0.07, headG, 6, 6);
+      sph(0.09, 0xff9ecb, -0.14, 0.55, 0.07, headG, 6, 6);
+      sph(0.05, 0xff6b81, 0, 0.08, 0.36, headG, 6, 6);
+      sph(0.05, 0x222222, 0.15, 0.18, 0.32, headG, 6, 6);
+      sph(0.05, 0x222222, -0.15, 0.18, 0.32, headG, 6, 6);
+      sph(0.2, 0xffffff, 0, 0.55, -0.55, g, 8, 8);
+      const a = { kind:"rabbit", group:g, head:headG, area:{ x1:3, x2:13, z1:33, z2:42 },
+                  target:new THREE.Vector3(x, 0, z), speed:rand(1.3, 1.8), state:"pause", timer:rand(0.5, 2), peckT:0, hopT:0, feedCount:0, growth:0 };
+      animals.push(a);
+      registerInteractive(g, "rabbit", a, [hitBox(1.7, 2, 1.7, g)]);
       return a;
     }
     function buildCobo(){
@@ -1141,7 +1211,7 @@
       const r = it.type === "plot" ? 3.1 : big ? 3.4 : 1.5;
       selRing.userData.base = r / 1.5;
       selRing.scale.setScalar(selRing.userData.base);
-      if(it.type === "chicken" || it.type === "sheep") it.ref.hopT = 0.45;
+      if(it.type === "chicken" || it.type === "sheep" || it.type === "rabbit") it.ref.hopT = 0.45;
       if(it.type === "cobo") it.ref.hopT = 0.45;
       showActionPanel(it);
     }
@@ -1185,6 +1255,9 @@
         desc.textContent = S.hunger < 40 ? "배가 고파 보여요! 밥을 주세요." : "꼬꼬댁! 닭이 신나 보여요.";
         btns.appendChild(actionBtn("🌽 먹이 주기 (영어 퀴즈)", "green", () => openQuiz("listen", {}, () => feedAnimal("chicken"))));
         btns.appendChild(actionBtn("🎾 놀아주기", "blue", () => playWith(it.ref, "🐔 닭이 폴짝폴짝 뛰어요!")));
+        btns.appendChild(actionBtn("🍚 먹이 주기 (먹이 " + (S.bag.feed || 0) + "개)", "", () => { feedOneWithItem(it.ref); refreshActionPanel(); }));
+        btns.appendChild(actionBtn("🐾 산책 같이 가기", "", () => { if(window.EF) EF.startWalk(it.ref); }));
+        if(growthStage(it.ref) >= 2) btns.appendChild(actionBtn("👶 아기 낳기", "green", () => { spawnBaby("chicken", it.ref); refreshActionPanel(); }));
       } else if(it.type === "sheep"){
         const a = it.ref;
         title.textContent = "🐑 양";
@@ -1193,6 +1266,17 @@
         btns.appendChild(actionBtn("🥕 먹이 주기 (영어 퀴즈)", "green", () => openQuiz("listen", {}, () => feedAnimal("sheep"))));
         btns.appendChild(actionBtn("✂️ 양털 깎기 (수학 퀴즈)", "", () => openQuiz("math", {}, () => shearSheep(a)), !canShear));
         btns.appendChild(actionBtn("🎾 놀아주기", "blue", () => playWith(a, "🐑 양이 메에~ 하고 웃어요!")));
+        btns.appendChild(actionBtn("🍚 먹이 주기 (먹이 " + (S.bag.feed || 0) + "개)", "", () => { feedOneWithItem(it.ref); refreshActionPanel(); }));
+        btns.appendChild(actionBtn("🐾 산책 같이 가기", "", () => { if(window.EF) EF.startWalk(it.ref); }));
+        if(growthStage(it.ref) >= 2) btns.appendChild(actionBtn("👶 아기 낳기", "green", () => { spawnBaby("sheep", it.ref); refreshActionPanel(); }));
+      } else if(it.type === "rabbit"){
+        title.textContent = "🐰 토끼";
+        desc.textContent = "깡충깡충! 토끼가 신나 보여요.";
+        btns.appendChild(actionBtn("🥕 먹이 주기 (영어 퀴즈)", "green", () => openQuiz("listen", {}, () => feedAnimal("rabbit"))));
+        btns.appendChild(actionBtn("🎾 놀아주기", "blue", () => playWith(it.ref, "🐰 토끼가 깡충깡충 뛰어요!")));
+        btns.appendChild(actionBtn("🍚 먹이 주기 (먹이 " + (S.bag.feed || 0) + "개)", "", () => { feedOneWithItem(it.ref); refreshActionPanel(); }));
+        btns.appendChild(actionBtn("🐾 산책 같이 가기", "", () => { if(window.EF) EF.startWalk(it.ref); }));
+        if(growthStage(it.ref) >= 2) btns.appendChild(actionBtn("👶 아기 낳기", "green", () => { spawnBaby("rabbit", it.ref); refreshActionPanel(); }));
       } else if(it.type === "cobo"){
         title.textContent = "🤖 로봇 강아지 코보";
         desc.textContent = "코보는 코딩 블록으로 움직일 수 있어요!";
@@ -1245,9 +1329,9 @@
     }
     function feedAnimal(kind){
       addHunger(26); addHappiness(8);
-      animals.filter(a => a.kind === kind).forEach(a => a.hopT = 0.5);
+      animals.filter(a => a.kind === kind).forEach(a => growthFeed(a));
       if(kind === "chicken"){ bumpCounter("feedChicken"); if(Math.random() < 0.45) setTimeout(spawnEgg, 1200); }
-      toast(kind === "chicken" ? "🐔 닭이 맛있게 먹어요! 꼬꼬댁!" : "🐑 양이 맛있게 먹어요! 메에~");
+      toast(kind === "chicken" ? "🐔 닭이 맛있게 먹어요! 꼬꼬댁!" : (kind === "rabbit" ? "🐰 토끼가 맛있게 먹어요! 깡충!" : "🐑 양이 맛있게 먹어요! 메에~"));
       floater("❤️"); floater("😋");
       if(window.EF) EF.afterAction("feed", { kind:kind });
     }
@@ -1880,6 +1964,20 @@
           ' 씨앗</div><div class="desc">밭을 눌러 심을 수 있어요</div></div><span class="price">' + S.seeds[k] + '개</span>';
         list.appendChild(row);
       });
+      [{ k:"feed", em:"🍚", name:"동물 밥", desc:"동물에게 밥을 줄 때 써요 (동물을 눌러요)" },
+       { k:"snackBerry", em:"🍓", name:"딸기 간식", desc:"먹으면 행복 +8, 배고픔 +6" },
+       { k:"snackCookie", em:"🍪", name:"쿠키 간식", desc:"먹으면 행복 +6, 배고픔 +8" }].forEach(it => {
+        if((S.bag[it.k] || 0) <= 0) return; empty = false;
+        const row = document.createElement("div"); row.className = "row";
+        row.innerHTML = '<span class="em">' + it.em + '</span><div class="info"><div class="name">' + it.name + '</div><div class="desc">' + it.desc + '</div></div><span class="price">' + S.bag[it.k] + '개</span>';
+        if(it.k !== "feed"){
+          const b = document.createElement("button"); b.className = "btn green"; b.textContent = "😋 먹기";
+          b.style.cssText = "min-height:48px; padding:8px 14px; font-size:18px;";
+          b.addEventListener("click", () => { eatSnack(it.k); renderBag(); });
+          row.appendChild(b);
+        }
+        list.appendChild(row);
+      });
       if(empty) list.innerHTML = '<p class="sub" style="text-align:center; font-size:19px;">가방이 비었어요. 밭에서 작물을 수확해 보세요! 🌱</p>';
     }
     function renderQuests(){
@@ -2502,6 +2600,10 @@ function collect(){
     playerPos:player ? (indoor ? { x:BUILDINGS[indoor.id].door.x, z:BUILDINGS[indoor.id].door.z }
       : { x:Math.round(player.group.position.x * 10) / 10, z:Math.round(player.group.position.z * 10) / 10 }) : null,
     decors:decors.map(d => ({ type:d.type, x:Math.round(d.x * 10) / 10, z:Math.round(d.z * 10) / 10 })),
+    animalsState:animalsStateSnap(),
+    houseCustom:deep(houseCustom), petHouseCustom:deep(petHouseCustom),
+    houseFurn:deep(houseFurn), petHouseDecor:deep(petHouseDecor),
+    invitedNpc:invitedNpc ? invitedNpc.def.id : null,
     npcReq:npcReq ? deep(npcReq) : null
   };
 }
@@ -2538,7 +2640,7 @@ function applySaveData(d){
     if(d.prices && d.prices[k] != null) S.prices[k] = d.prices[k];
     if(d.prevPrices && d.prevPrices[k] != null) S.prevPrices[k] = d.prevPrices[k];
   });
-  ["egg","wool"].forEach(k => { if(d.bag && d.bag[k] != null) S.bag[k] = d.bag[k] | 0; });
+  ["egg","wool","feed","snackBerry","snackCookie"].forEach(k => { if(d.bag && d.bag[k] != null) S.bag[k] = d.bag[k] | 0; });
   S.bank = d.bank | 0; S.bankInterestTotal = d.bankInterestTotal | 0;
   if(d.counters) Object.keys(S.counters).forEach(k => { if(d.counters[k] != null) S.counters[k] = d.counters[k] | 0; });
   S.questRound = d.questRound || 1;
@@ -2555,6 +2657,13 @@ function applySaveData(d){
   if(Array.isArray(d.sheepWool)) d.sheepWool.forEach((w, i) => {
     if(sheep[i]){ sheep[i].woolScale = clamp(w, 0.45, 1); sheep[i].wool.scale.setScalar(sheep[i].woolScale); }
   });
+  if(d.houseCustom) houseCustom = Object.assign(houseCustom, d.houseCustom);
+  if(d.petHouseCustom) petHouseCustom = Object.assign(petHouseCustom, d.petHouseCustom);
+  if(Array.isArray(d.houseFurn)) houseFurn = d.houseFurn.slice();
+  if(Array.isArray(d.petHouseDecor)) petHouseDecor = d.petHouseDecor.slice();
+  if(Array.isArray(d.animalsState)) syncAnimalsFromState(d.animalsState);
+  if(d.invitedNpc){ const _n = npcs.find(x => x.def.id === d.invitedNpc); if(_n) inviteFriend(_n, true); }
+  applyHouseCustom(true); rebuildPetHouse(); rebuildHouseFurn(); rebuildPetHouseDecor();
   try{ codePuzzle = clamp(d.codePuzzle | 0, 0, 2); }catch(e){}
   if(d.profile){ profile = Object.assign(profile, d.profile); saveProfile(); }
   if(d.quizSet && window.QZSET) window.QZSET.set(d.quizSet);
@@ -2857,13 +2966,17 @@ const NPC_DEFS = [
   { id:"grandma", name:"요리사 할머니", role:"cook", shirt:0xe88ca0, face:2, hat:"straw", style:"round", home:{ x:33, z:0 }, r:9, labelColor:"#e88ca0" },
   { id:"merchant", name:"상인 아저씨", role:"shop", shirt:0x4d7fb8, face:1, hat:"cap", style:"mouse", home:{ x:43, z:11 }, r:7, labelColor:"#4da3ff" },
   { id:"teacher", name:"선생님", role:"quiz", shirt:0x58b368, face:0, hat:"none", style:"puppy", home:{ x:-3, z:-3 }, r:11, labelColor:"#58b368" },
-  { id:"kid", name:"꼬마 친구", role:"play", shirt:0xffc93d, face:1, hat:"flower", style:"round", home:{ x:4, z:12 }, r:10, scale:0.78, labelColor:"#ffc93d" }
+  { id:"kid", name:"꼬마 친구", role:"play", shirt:0xffc93d, face:1, hat:"flower", style:"round", home:{ x:4, z:12 }, r:10, scale:0.78, labelColor:"#ffc93d" },
+  { id:"friendJiu", name:"지우", role:"friend", shirt:0xff9f2e, face:1, hat:"none", style:"round", home:{ x:30, z:14 }, r:8, scale:0.85, labelColor:"#ff9f2e" },
+  { id:"friendHaeun", name:"하은", role:"friend", shirt:0xff8fb3, face:0, hat:"flower", style:"puppy", home:{ x:10, z:30 }, r:8, scale:0.85, labelColor:"#ff8fb3" },
+  { id:"friendMinjun", name:"민준", role:"friend", shirt:0x4da3ff, face:2, hat:"cap", style:"mouse", home:{ x:25, z:24 }, r:8, scale:0.85, labelColor:"#4da3ff" }
 ];
 const NPC_LINES = {
   cook:   { morning:["좋은 아침! 오늘은 뭘 심을까?", "아침엔 당근죽이 최고야."], day:["맛있는 냄새 나지? 점심 준비 중이야.", "신선한 작물을 가져오면 내가 사줄게!"], evening:["저녁엔 따뜻한 수프가 좋아.", "오늘도 농장 돌보느라 수고했어."] },
   shop:   { morning:["어서 와! 오늘 시세가 좋아.", "아침 장사가 제일 바빠."], day:["플리마켓에 좋은 물건이 많아!", "비쌀 때 파는 게 비법이야."], evening:["오늘 장사는 여기까지! 내일 또 와.", "저녁엔 가격이 내리기도 해."] },
   quiz:   { morning:["좋은 아침! 머리 깨우는 퀴즈 어때?", "아침 공부가 제일 잘 돼."], day:["모르는 건 물어봐. 힌트를 줄게!", "퀴즈를 풀면 별을 받을 수 있어."], evening:["오늘 배운 걸 복습해 볼까?", "별이 모이면 레벨이 올라가!"] },
-  play:   { morning:["안녕! 오늘도 같이 놀자!", "아침부터 신나!"], day:["미니게임 대결하자! 내가 이길지도?", "숨바꼭질보다 카드 게임이 좋아."], evening:["조금만 더 놀고 싶다…", "내일 또 놀자! 약속!"] }
+  play:   { morning:["안녕! 오늘도 같이 놀자!", "아침부터 신나!"], day:["미니게임 대결하자! 내가 이길지도?", "숨바꼭질보다 카드 게임이 좋아."], evening:["조금만 더 놀고 싶다…", "내일 또 놀자! 약속!"] },
+  friend: { morning:["좋은 아침! 오늘 같이 놀자!", "아침 산책 갈래?"], day:["같이 놀면 더 재미있어!", "내 집에 놀러 올래?", "놀이터에서 만나자!"], evening:["오늘 정말 재미있었어!", "내일 또 만나자! 약속!"] }
 };
 function buildNpcs(){
   NPC_DEFS.forEach(def => {
@@ -2944,6 +3057,17 @@ function openNpcDialog(npc){
       toast("💡 힌트: 그림 속 달걀을 천천히 세어 봐요!");
       setTimeout(() => openQuiz("random", {}, () => { toast("선생님: 참 잘했어요! 👏"); }), 600);
     });
+  } else if(npc.def.role === "friend"){
+    role.textContent = npc.invited ? ("👋 " + npc.def.name + " 집으로 보내기") : "🏠 내 집으로 초대하기";
+    role.addEventListener("click", () => {
+      $id("npcModal").hidden = true;
+      if(npc.invited){ npc.invited = false; if(invitedNpc === npc) invitedNpc = null; toast("👋 " + npc.def.name + "이(가) 집으로 돌아갔어요!"); autosave(); }
+      else inviteFriend(npc);
+    });
+    const visit = document.createElement("button");
+    visit.className = "btn blue"; visit.textContent = "🏠 " + npc.def.name + " 집 구경하기";
+    visit.addEventListener("click", () => { $id("npcModal").hidden = true; visitFriendHouse(npc); });
+    btns.appendChild(visit);
   } else {
     role.textContent = "🎮 미니게임 같이 하기";
     role.addEventListener("click", () => { $id("npcModal").hidden = true; openMinigames(); });
@@ -3114,6 +3238,12 @@ function panelFor(it, title, desc, btns, actionBtn){
   if(it.type === "prop"){
     title.textContent = it.ref.title;
     desc.textContent = it.ref.msg;
+    if(it.ref.title.indexOf("침대") >= 0 && indoor && indoor.id === "house"){
+      btns.appendChild(actionBtn("🛏️ 눕기 (행복 +10)", "green", () => { closeActionPanel(); lieDown(); }));
+    }
+    if(it.ref.title.indexOf("책장") >= 0){
+      btns.appendChild(actionBtn("📖 책 읽기", "blue", () => { closeActionPanel(); openReadBook(); }));
+    }
     btns.appendChild(actionBtn("😊 재미있어요!", "green", () => { addHappiness(2); if(it.ref.sfx) sndFX(it.ref.sfx); floater("💛"); closeActionPanel(); }));
     return true;
   }
@@ -3122,7 +3252,9 @@ function panelFor(it, title, desc, btns, actionBtn){
     title.textContent = B.em + " " + B.name;
     desc.textContent = "안에 들어가서 구경할 수 있어요!";
     btns.appendChild(actionBtn("🚪 들어가기", "green", () => { closeActionPanel(); enterBuilding(it.ref.bid); }));
-    if(it.ref.bid === "shop") btns.appendChild(actionBtn("🛒 씨앗 상점 열기", "blue", () => openModal("shopModal")));
+    if(it.ref.bid === "shop"){ btns.appendChild(actionBtn("🛒 씨앗 상점 열기", "blue", () => openModal("shopModal"))); btns.appendChild(actionBtn("🏪 편의점 열기", "green", () => { closeActionPanel(); openStore(); })); }
+    if(it.ref.bid === "house") btns.appendChild(actionBtn("🏠 내 집 꾸미기", "blue", () => { closeActionPanel(); openHouseCustom(); }));
+    if(it.ref.bid === "pethouse") btns.appendChild(actionBtn("🐾 동물 집 꾸미기", "blue", () => { closeActionPanel(); openPetHouseDecor(); }));
     return true;
   }
   if(it.type === "barn"){
@@ -3302,7 +3434,7 @@ function checkNear(){
       key:kind + ":" + (ref.def ? ref.def.id : (ref.kind || ref.idx)) };
   };
   npcs.forEach(n => consider("npc", n, n.char.group.position, 3.6, n.def.name + "이(가) 가까이 있어요", "💬 말하기", () => openNpcDialog(n)));
-  animals.forEach(a => consider(a.kind, a, a.group.position, 3.4, a.kind === "chicken" ? "닭이 가까이 있어요" : "양이 가까이 있어요", "🌽 먹이주기", () => openQuiz("listen", {}, () => feedAnimal(a.kind))));
+  animals.forEach(a => consider(a.kind, a, a.group.position, 3.4, a.kind === "chicken" ? "닭이 가까이 있어요" : (a.kind === "rabbit" ? "토끼가 가까이 있어요" : "양이 가까이 있어요"), "🌽 먹이주기", () => openQuiz("listen", {}, () => feedAnimal(a.kind))));
   if(cobo) consider("cobo", cobo, cobo.group.position, 3.4, "코보가 가까이 있어요", "🤖 코보랑 놀기", () => { const it = interactives.find(i => i.type === "cobo"); if(it) selectTarget(it); });
   plots.forEach(pl => {
     if(pl.state === "ready") consider("plot", pl, pl.group.position, 3.8, "다 자란 작물이 있어요!", "🧺 수확하기", () => openQuiz("math", {}, () => harvestCrop(pl)));
@@ -3368,6 +3500,15 @@ function moveToward(ch, tx, tz, speed, dt){
 }
 function frame(dt, t){
   if(!player || !gameStarted) return;
+  if(lyingDown){
+    lieTimer -= dt;
+    if(lieTimer <= 0){ lieTimer = 2; addHappiness(2); if(S.happiness >= 100){ standUp(); toast("😊 푹 쉬었어요! 행복도가 가득 찼어요!"); } }
+    animChar(player, dt, false);
+    camTarget.x += (player.group.position.x - camTarget.x) * Math.min(1, dt * 3.5);
+    camTarget.z += (player.group.position.z - camTarget.z) * Math.min(1, dt * 3.5);
+    updateCamera();
+    return;
+  }
   // 내 캐릭터 이동 (조이스틱 · 바닥 탭 걸어가기 · 키보드 WASD/방향키)
   let moving = false;
   let ix = 0, iz = 0, mag = 0;
@@ -3426,6 +3567,12 @@ function frame(dt, t){
       animChar(ch, dt, mv);
       return;
     }
+    if(n.invited){
+      if(indoor && indoor.id === "house"){ mv = !moveToward(ch, player.group.position.x + 1.4, player.group.position.z + 0.6, 3.2, dt); }
+      else { const D = BUILDINGS.house.door; mv = !moveToward(ch, D.x + 1, D.z + 1.2, n.speed, dt); }
+      animChar(ch, dt, mv);
+      return;
+    }
     if(npcReq && npcReq.npcId === n.def.id){
       mv = !moveToward(ch, 4, 4, n.speed, dt);
     } else {
@@ -3468,6 +3615,7 @@ function frame(dt, t){
   if(mmTimer <= 0){ mmTimer = 0.25; drawMinimap(); }
   nearTimer -= dt;
   if(nearTimer <= 0){ nearTimer = 0.3; checkNear(); }
+  tickWalk(dt, t);
   netFrame(dt, t);
   updateBubbles();
   tickExtras(dt, t);
@@ -3882,12 +4030,13 @@ function sharedSnap(){
   const s = collect();
   return { coins:s.coins, happiness:s.happiness, hunger:s.hunger, seeds:s.seeds, bag:s.bag, bank:s.bank,
     bankInterestTotal:s.bankInterestTotal, prices:s.prices, prevPrices:s.prevPrices, counters:s.counters,
-    questRound:s.questRound, quests:s.quests, plots:s.plots, sheepWool:s.sheepWool, decors:s.decors, codePuzzle:s.codePuzzle };
+    questRound:s.questRound, quests:s.quests, plots:s.plots, sheepWool:s.sheepWool, decors:s.decors, codePuzzle:s.codePuzzle,
+    animalsState:s.animalsState, houseCustom:s.houseCustom, petHouseCustom:s.petHouseCustom, houseFurn:s.houseFurn, petHouseDecor:s.petHouseDecor };
 }
 function applyShared(s){
   if(!s) return;
   S.coins = s.coins | 0; S.happiness = clamp(s.happiness, 0, 100); S.hunger = clamp(s.hunger, 0, 100);
-  ["carrot","tomato","corn","melon","egg","wool"].forEach(k => {
+  ["carrot","tomato","corn","melon","egg","wool","feed","snackBerry","snackCookie"].forEach(k => {
     if(s.bag && s.bag[k] != null) S.bag[k] = s.bag[k] | 0;
     if(s.seeds && s.seeds[k] != null) S.seeds[k] = s.seeds[k] | 0;
     if(s.prices && s.prices[k] != null) S.prices[k] = s.prices[k];
@@ -3910,6 +4059,11 @@ function applyShared(s){
     decors.slice().forEach(dc => { if(!want.has(decorKey(dc)) && now() - (dc.placedAt || 0) > 5000) removeDecor(dc, true); });
     sDecors.forEach(d => { if(!decors.find(x => decorKey(x) === decorKey(d))) placeDecor(d.type, d.x, d.z, { fromNet:true }); });
   }
+  if(s.houseCustom){ const _sig = JSON.stringify(s.houseCustom); if(_sig !== lastHouseSig){ houseCustom = Object.assign({}, s.houseCustom); applyHouseCustom(); } }
+  if(s.petHouseCustom){ petHouseCustom = Object.assign({}, s.petHouseCustom); rebuildPetHouse(); }
+  if(Array.isArray(s.houseFurn)){ houseFurn = s.houseFurn.slice(); rebuildHouseFurn(); }
+  if(Array.isArray(s.petHouseDecor)){ petHouseDecor = s.petHouseDecor.slice(); rebuildPetHouseDecor(); }
+  if(Array.isArray(s.animalsState)) syncAnimalsFromState(s.animalsState);
   updateHUD(); updateQuestBadge();
 }
 
@@ -4490,6 +4644,10 @@ function wireButtons(){
   const dockL = $id("dockLeft"), dockR = $id("dockRight");
   const mk = (em, label) => { const b = document.createElement("button"); b.className = "dock-btn"; b.innerHTML = '<span class="em">' + em + '</span>' + label; return b; };
   const bDecor = mk("🎨", "가꾸기"); bDecor.addEventListener("click", () => setDecorMode(!decorMode)); dockL.appendChild(bDecor);
+  const bStore = mk("🏪", "편의점"); bStore.addEventListener("click", () => openStore()); dockL.appendChild(bStore);
+  const bWalk = mk("🐾", "산책하기"); bWalk.addEventListener("click", () => toggleWalk()); dockL.appendChild(bWalk);
+  const bHouse = mk("🏠", "집 꾸미기"); bHouse.addEventListener("click", () => openHouseCustom()); dockR.appendChild(bHouse);
+  const bPlay = mk("🎠", "놀이터"); bPlay.addEventListener("click", () => { const z = ZONES.find(zz => zz.id === "play"); if(z) teleport(z); }); dockR.appendChild(bPlay);
   const bPrize = mk("🎁", "상품함"); bPrize.addEventListener("click", () => openPrizes()); dockR.appendChild(bPrize);
   const bMini = mk("🎉", "이벤트"); bMini.addEventListener("click", () => openMinigames()); dockR.appendChild(bMini);
   $id("btnSave").addEventListener("click", () => { save(true); netSend({ t:"act", name:profile.name, desc:"저장했어요" }); });
@@ -4644,7 +4802,9 @@ const BUILDINGS = {
   coop:   { name:"닭장",   em:"🐔", say:"닭장",   door:{ x:-11.5, z:-5.2 } },
   sheep:  { name:"양 우리", em:"🐑", say:"양 우리", door:{ x:12.5, z:-9.6 } },
   shop:   { name:"상점",   em:"🏪", say:"상점",   door:{ x:38,   z:-9.8 } },
-  school: { name:"교실",   em:"🏫", say:"교실",   door:{ x:-1,   z:-15.6 } }
+  school: { name:"교실",   em:"🏫", say:"교실",   door:{ x:-1,   z:-15.6 } },
+  pethouse:{ name:"동물 집", em:"🐾", say:"동물 집", door:{ x:24,  z:4.6 } },
+  friendhouse:{ name:"친구 집", em:"🏠", say:"친구 집", door:{ x:44, z:22.9 } }
 };
 const INTERIORS = {
   house:  { cx:150, cz:-160, wall:0xffc9d6, floor:0xe8b07a },
@@ -4652,7 +4812,9 @@ const INTERIORS = {
   coop:   { cx:222, cz:-160, wall:0xf0c08a, floor:0xdbb06a },
   sheep:  { cx:258, cz:-160, wall:0xcfe6ff, floor:0xaed69a },
   shop:   { cx:294, cz:-160, wall:0xffe3b3, floor:0xe8cfa0 },
-  school: { cx:330, cz:-160, wall:0xdff2d8, floor:0xd9b98a }
+  school: { cx:330, cz:-160, wall:0xdff2d8, floor:0xd9b98a },
+  pethouse: { cx:366, cz:-160, wall:0xffe3b3, floor:0xe8cfa0 },
+  friendhouse: { cx:402, cz:-160, wall:0xd6ecff, floor:0xcfe6ff }
 };
 function clampPlayerPos(p){
   if(indoor){
@@ -4677,6 +4839,8 @@ function enterBuilding(id){
   toast(B.em + " " + B.say + " 안에 들어왔어요!", 2800);
   const eb = $id("btnExitRoom"); if(eb) eb.style.display = "flex";
   hideNear(); closeActionPanel();
+  if(invitedNpc && id === "house"){ invitedNpc.char.group.position.set(R.cx + 2, 0, R.cz + 2); invitedNpc.char.group.rotation.y = Math.PI; }
+  if(visitingNpc && id === "friendhouse"){ visitingNpc.char.group.position.set(R.cx - 2, 0, R.cz + 1); visitingNpc.char.group.rotation.y = 0; }
   autosave();
 }
 function exitBuilding(){
@@ -4691,6 +4855,9 @@ function exitBuilding(){
   toast("🌞 밖으로 나왔어요!");
   const eb = $id("btnExitRoom"); if(eb) eb.style.display = "none";
   hideNear();
+  if(lyingDown) standUp(true);
+  if(invitedNpc && B === BUILDINGS.house){ invitedNpc.char.group.position.set(B.door.x + 1, 0, B.door.z + 1); }
+  if(visitingNpc && B === BUILDINGS.friendhouse){ visitingNpc.char.group.position.set(visitingNpc.def.home.x, 0, visitingNpc.def.home.z); visitingNpc = null; }
   autosave();
 }
 function propAt(x, z, w, h, d, title, msg, sfx){
@@ -4745,7 +4912,10 @@ function buildInteriors(){
     box(2.9, 0.35, 1.8, 0xffffff, cx - 4.4, 0.75, cz - 3.6, g);
     box(0.85, 0.28, 1.25, 0xfff3cf, cx - 5.6, 0.95, cz - 3.6, g);
     box(1.9, 0.4, 1.85, 0xff9ecb, cx - 3.9, 0.82, cz - 3.6, g);
-    propAt(cx - 4.4, cz - 3.6, 3.2, 1.4, 2.1, "🛏️ 침대", "침대가 푹신푹신해요! 쿨쿨 자고 싶어요 😴");
+    propAt(cx - 4.4, cz - 3.6, 3.2, 1.4, 2.1, "🛏️ 침대", "침대가 푹신푹신해요! 눕기를 누르면 쿨쿨 잘 수 있어요 😴");
+    houseBedTop = new THREE.Group(); houseBedTop.position.set(cx - 4.4, 1.08, cz - 3.6); g.add(houseBedTop);
+    box(3.1, 0.3, 2.0, 0xff9ecb, 0, 0, 0, houseBedTop);
+    box(0.9, 0.3, 1.3, 0xffffff, -1.0, 0.12, 0, houseBedTop);
     box(2.6, 0.16, 1.6, 0xa9743f, cx + 3.6, 1.02, cz - 3.2, g);
     [[-1.1, -0.65], [1.1, -0.65], [-1.1, 0.65], [1.1, 0.65]].forEach(o => cyl(0.07, 0.07, 1, 0x7a4326, cx + 3.6 + o[0], 0.5, cz - 3.2 + o[1], g, 6));
     sph(0.3, 0xe84c3d, cx + 3.2, 1.25, cz - 3.2, g, 8, 8); sph(0.3, 0xffc93d, cx + 4.1, 1.25, cz - 3.1, g, 8, 8);
@@ -4757,6 +4927,9 @@ function buildInteriors(){
     propAt(cx + 6.4, cz - 3.4, 1.4, 2.3, 2.5, "🔥 벽난로", "벽난로가 따뜻해요! 손을 녹여요 🔥", "dingdong");
     cyl(0.32, 0.4, 0.5, 0xc0523f, cx - 6.2, 0.25, cz + 3.4, g, 10);
     sph(0.55, 0x58b368, cx - 6.2, 0.85, cz + 3.4, g, 9, 8);
+    box(2.4, 2.4, 0.6, 0x8a5a2b, cx + 5.6, 1.2, cz + 3.4, g);
+    [0xe84c3d, 0xf6c945, 0x4da3ff, 0x58b368, 0xff9ecb].forEach((c, i) => { box(0.32, 0.8, 0.4, c, cx + 4.8 + (i % 3) * 0.45, 1.9, cz + 3.4, g); box(0.32, 0.7, 0.4, c, cx + 4.8 + (i % 3) * 0.45, 0.9, cz + 3.4, g); });
+    propAt(cx + 5.6, cz + 3.4, 2.6, 2.6, 0.8, "📚 책장", "책장에 재미있는 동화책이 가득해요! 📖");
   }
   /* 헛간: 건초 · 상자 · 도구 */
   {
@@ -4857,6 +5030,31 @@ function buildInteriors(){
     sph(0.48, 0x4db8e8, cx + 6, 1.35, cz - 4.4, g, 12, 10);
     sph(0.2, 0x58b368, cx + 6.25, 1.5, cz - 4.15, g, 7, 7);
     const clk = cyl(0.42, 0.42, 0.09, 0xffffff, cx + 5.2, 2.7, cz - 5.78, g, 16); clk.rotation.x = Math.PI / 2;
+  }
+  /* 동물 집: 침대 · 밥그릇 자리 · 장난감 (꾸미기로 더 놓을 수 있어요) */
+  {
+    const R = INTERIORS.pethouse, g = buildRoomShell("pethouse"), cx = R.cx, cz = R.cz;
+    const rug = new THREE.Mesh(new THREE.CircleGeometry(2.4, 20), mat(0xffe3b3));
+    rug.rotation.x = -Math.PI / 2; rug.position.set(cx, 0.07, cz); g.add(rug);
+    box(2.2, 0.5, 1.6, 0x8a5a2b, cx - 3.5, 0.25, cz - 3.5, g);
+    box(2.1, 0.3, 1.5, 0xff9ecb, cx - 3.5, 0.6, cz - 3.5, g);
+    propAt(cx - 3.5, cz - 3.5, 2.4, 1.2, 1.8, "🛏️ 동물 침대", "동물들이 여기서 쿨쿨 자요! 😴");
+    cyl(0.5, 0.4, 0.35, 0x4da3ff, cx + 2, 0.18, cz - 3.5, g, 12);
+    sph(0.4, 0xff6b81, cx + 4.5, 0.4, cz - 1, g, 10, 10);
+    propAt(cx + 2, cz - 3.5, 1.4, 1, 1.4, "🥣 밥그릇", "동물 밥그릇이에요! 밥을 주면 동물이 와서 먹어요 🍚");
+  }
+  /* 친구 집: 침대 · 식탁 · 책장 */
+  {
+    const R = INTERIORS.friendhouse, g = buildRoomShell("friendhouse"), cx = R.cx, cz = R.cz;
+    const rug = new THREE.Mesh(new THREE.CircleGeometry(2.1, 20), mat(0xffd6e8));
+    rug.rotation.x = -Math.PI / 2; rug.position.set(cx, 0.07, cz - 0.5); g.add(rug);
+    box(3, 0.5, 1.9, 0x4d7fb8, cx - 4.4, 0.35, cz - 3.6, g);
+    box(2.9, 0.35, 1.8, 0xffffff, cx - 4.4, 0.75, cz - 3.6, g);
+    box(2.6, 0.16, 1.6, 0xa9743f, cx + 3.6, 1.02, cz - 3.2, g);
+    [[-1.1, -0.65], [1.1, -0.65], [-1.1, 0.65], [1.1, 0.65]].forEach(o => cyl(0.07, 0.07, 1, 0x7a4326, cx + 3.6 + o[0], 0.5, cz - 3.2 + o[1], g, 6));
+    box(2.2, 2.2, 0.6, 0x8a5a2b, cx + 5.6, 1.1, cz + 3.4, g);
+    propAt(cx - 4.4, cz - 3.6, 3.2, 1.4, 2.1, "🛏️ 친구 침대", "친구의 침대예요! 푹신푹신해요 😴");
+    propAt(cx + 5.6, cz + 3.4, 2.4, 2.4, 0.8, "📚 친구 책장", "친구의 책장이에요! 재미있는 책이 많아요 📖");
   }
 }
 
@@ -5158,7 +5356,9 @@ function buildExpansions(){
   const barnSign = makeLabel("🏚️ 헛간", "#c0523f"); barnSign.position.set(11.5, 6.7, 11.6); scene.add(barnSign);
   const coopSign = makeLabel("🐔 닭장", "#e08a4c"); coopSign.position.set(-11.5, 4.9, -6.6); scene.add(coopSign);
   /* 새 건물들 */
-  buildHouseLike({ bid:"house",  x:-19,  z:12,    w:6,   d:5,   h:3.2, wall:0xffe3b3, roof:0xe86a5e });
+  buildCustomHouse();
+  buildCustomPetHouse();
+  buildHouseLike({ bid:"friendhouse", x:44, z:20, w:5, d:4.5, h:3, wall:0xcfe6ff, roof:0x8a6fd6 });
   buildHouseLike({ bid:"shop",   x:38,   z:-13.5, w:6.5, d:5,   h:3.4, wall:0xd6ecff, roof:0x4d7fb8, awning:true });
   buildHouseLike({ bid:"school", x:-1,   z:-19.5, w:7.5, d:5.5, h:3.6, wall:0xfff3cf, roof:0x58b368 });
   buildHouseLike({ bid:"sheep",  x:15.2, z:-9.6,  w:3.2, d:3,   h:2.2, wall:0xd9a066, roof:0x8a5a2b, doorSide:"-x" });
@@ -5480,11 +5680,542 @@ if(micBtnEl){
 }
 renderVoiceUI();
 
+
+/* ================================================================
+   새 기능 2차: 편의점 · 동물 성장/산책 · 동물 집 · 내 집 꾸미기
+   (외관/내부) · 침대/책장 · 간식 · 친구 초대/방문
+   ================================================================ */
+let houseCustom = { name:"", wall:"#ffe3b3", roof:"tri", window:"square", door:"#7a4326", chimney:true, fence:"#ffffff" };
+let petHouseCustom = { wall:"#d9a066", roof:"tri" };
+let houseFurn = [];       /* {type, slot} */
+let petHouseDecor = [];   /* {type} */
+let walkMode = false, walkBuddy = null, walkGatherT = 0;
+let invitedNpc = null, visitingNpc = null;
+let lyingDown = false, lieTimer = 0;
+let houseGroup = null, petHouseGroup = null, houseBedTop = null;
+let houseFurnGroup = null, petDecorGroup = null;
+let lastHouseSig = "", lastPetSig = "";
+
+const HOUSE_WALLS = [["#ffe3b3","노랑"],["#ffd6e8","분홍"],["#d6ecff","파랑"],["#d8f3c8","초록"],["#ffffff","하양"],["#f2d492","주황"]];
+const HOUSE_DOORS = [["#7a4326","갈색"],["#e84c3d","빨강"],["#4d7fb8","파랑"],["#58b368","초록"]];
+const HOUSE_FENCES = [["#ffffff","하양"],["#ffd6e8","분홍"],["#d6ecff","파랑"],["#f2d492","주황"]];
+const ROOFS = [["tri","🔺 삼각"],["flat","⬜ 평평"],["round","🔵 둥근"],["pointy","🔼 뾰족"]];
+const WINDOWS = [["square","⬜ 네모"],["round","⭕ 동그란"],["arch","🌈 아치"]];
+const PET_WALLS = [["#d9a066","갈색"],["#ffd6e8","분홍"],["#d6ecff","파랑"],["#d8f3c8","초록"]];
+const STORE_ITEMS = [
+  { id:"babyChicken", em:"🐣", name:"병아리", desc:"작은 아기 닭! 밥을 주면 쑥쑥 커요", price:30, kind:"animal", animal:"chicken" },
+  { id:"babySheep", em:"🐑", name:"아기 양", desc:"작은 아기 양! 밥을 주면 쑥쑥 커요", price:40, kind:"animal", animal:"sheep" },
+  { id:"babyRabbit", em:"🐰", name:"아기 토끼", desc:"새 친구! 깡충깡충 뛰어요", price:50, kind:"animal", animal:"rabbit" },
+  { id:"feed", em:"🍚", name:"동물 밥 1개", desc:"동물에게 밥을 줄 때 써요", price:5, kind:"feed" },
+  { id:"feed5", em:"🍚", name:"동물 밥 5개", desc:"동물 밥 5개 묶음 (5코인 할인!)", price:20, kind:"feed5" },
+  { id:"snackBerry", em:"🍓", name:"딸기 간식", desc:"내가 먹는 간식! 행복 +8", price:8, kind:"snack" },
+  { id:"snackCookie", em:"🍪", name:"쿠키 간식", desc:"내가 먹는 간식! 배고픔 +8", price:6, kind:"snack" }
+];
+const FURN_ITEMS = [
+  { id:"chair", em:"🪑", name:"의자", price:10 },
+  { id:"desk", em:"✏️", name:"책상", price:15 },
+  { id:"plant", em:"🌷", name:"화분", price:8 },
+  { id:"rug", em:"🟪", name:"러그", price:12 },
+  { id:"lamp", em:"💡", name:"램프", price:10 },
+  { id:"shelf", em:"📚", name:"작은 책장", price:12 }
+];
+const HOUSE_FURN_SLOTS = [[144.5,-157.5],[147.5,-157.5],[150.5,-157.5],[153.5,-157.5],[155.5,-159.5],[155.5,-161.5]];
+const PET_DECOR_ITEMS = [
+  { id:"bed", em:"🛏️", name:"푹신 침대", price:10 },
+  { id:"bowl", em:"🥣", name:"밥그릇", price:5 },
+  { id:"toy", em:"⚽", name:"공 장난감", price:8 },
+  { id:"mat", em:"🟨", name:"푹신 매트", price:6 }
+];
+const PET_DECOR_SLOTS = { bed:[362.5,-163.5], bowl:[368,-163.5], toy:[370.5,-161], mat:[366,-158] };
+const READ_STORY = "옛날 옛날에, 숲 속에 작은 토끼 토토가 살았어요. 토토는 매일 아침 당근을 한 개씩 먹으며 힘을 키웠어요. 어느 날, 숲이 어두워지자 토토는 무서워서 떨었어요. 그때 다람쥐 도리가 나타나 \"같이 가자!\" 하고 손을 잡아 주었어요. 두 친구는 노래를 부르며 집으로 돌아왔고, 그날부터 토토는 혼자서도 용감해졌답니다. — 끝 —";
+
+/* ---- 새 모달들 ---- */
+const extraHtml = document.createElement("div");
+extraHtml.innerHTML = `
+<div class="modal" id="storeModal" hidden><div class="card">
+  <button class="x-btn" data-x="1">✕</button>
+  <h2>🏪 편의점</h2>
+  <p class="sub">코인으로 동물·밥·간식을 사요. 내 코인: <b id="storeCoins">0</b> 🪙</p>
+  <div id="storeList"></div>
+  <p class="sub">💡 돈이 부족하면 살 수 없어요. 퀘스트를 하거나 작물을 팔아 코인을 모아 보세요!</p>
+</div></div>
+<div class="modal" id="houseModal" hidden><div class="card">
+  <button class="x-btn" data-x="1">✕</button>
+  <h2>🏠 내 집 꾸미기</h2>
+  <p class="sub">집 이름을 쓰고, 색깔·지붕·창문을 골라요. 바꾸면 3D 집이 바로 바뀌어요!</p>
+  <label style="font-size:17px;">집 이름 (예: 모모의 집)</label>
+  <div style="display:flex; gap:8px; margin:6px 0 12px;">
+    <input id="houseNameInput" maxlength="10" style="flex:1; font-size:21px; padding:10px 12px; border:3px solid #e8cf96; border-radius:14px; font-family:inherit;" />
+    <button class="btn green" id="houseNameBtn" style="min-height:48px;">✔ 정하기</button>
+  </div>
+  <p class="sub" style="margin-bottom:4px;">🧱 벽 색깔</p><div class="swatch-row" id="houseWalls"></div>
+  <p class="sub" style="margin-bottom:4px;">🏠 지붕 모양</p><div class="swatch-row" id="houseRoofs"></div>
+  <p class="sub" style="margin-bottom:4px;">🪟 창문 모양</p><div class="swatch-row" id="houseWindows"></div>
+  <p class="sub" style="margin-bottom:4px;">🚪 문 색깔</p><div class="swatch-row" id="houseDoors"></div>
+  <p class="sub" style="margin-bottom:4px;">🏭 굴뚝</p><div class="swatch-row" id="houseChimney"></div>
+  <p class="sub" style="margin-bottom:4px;">🎨 울타리 색깔</p><div class="swatch-row" id="houseFences"></div>
+  <p class="sub" style="margin-bottom:4px;">🐾 동물 집</p><div class="swatch-row" id="petWalls"></div>
+  <div class="swatch-row" id="petRoofs" style="margin-top:6px;"></div>
+  <div class="btn-row"><button class="btn blue" id="houseFurnBtn">🛋️ 집 안 가구 사러 가기</button></div>
+</div></div>
+<div class="modal" id="furnModal" hidden><div class="card">
+  <button class="x-btn" data-x="1">✕</button>
+  <h2>🛋️ 집 안 가구</h2>
+  <p class="sub">가구를 사면 우리 집 안에 바로 놓여요. 내 코인: <b id="furnCoins">0</b> 🪙</p>
+  <div id="furnList"></div>
+  <p class="sub">💡 집 안에 들어가지 않아도 살 수 있어요. 들어가면 가구가 보여요!</p>
+</div></div>
+<div class="modal" id="petModal" hidden><div class="card">
+  <button class="x-btn" data-x="1">✕</button>
+  <h2>🐾 동물 집 꾸미기</h2>
+  <p class="sub">동물 집 안에 둘 물건을 사요. 내 코인: <b id="petCoins">0</b> 🪙</p>
+  <div id="petDecorList"></div>
+  <p class="sub">💡 동물 집 안에 들어가면 꾸민 게 보여요!</p>
+</div></div>
+<div class="modal" id="readModal" hidden><div class="card">
+  <button class="x-btn" data-x="1">✕</button>
+  <h2>📖 동화책</h2>
+  <p class="sub" id="readStory" style="font-size:19px; color:var(--ink); line-height:1.6;"></p>
+  <div id="readQuiz"></div>
+</div></div>
+<button id="lieBtn" type="button" hidden style="position:fixed; left:50%; transform:translateX(-50%); bottom:130px; z-index:60; font-size:22px; font-weight:700; padding:14px 26px; min-height:56px; border-radius:999px; border:3px solid #e8cf96; background:#ffd166; color:#54401f; font-family:inherit; cursor:pointer;">☀️ 일어나기</button>`;
+document.body.appendChild(extraHtml);
+extraHtml.querySelectorAll("[data-x]").forEach(b => b.addEventListener("click", () => { const m = b.closest(".modal"); if(m) m.hidden = true; sndPop(); }));
+$id("lieBtn").addEventListener("click", () => standUp());
+
+/* ---- 동물 상태 스냅샷 / 복원 ---- */
+function animalsStateSnap(){
+  return animals.filter(a => a.kind !== "cobo").map(a => ({
+    kind:a.kind, x:Math.round(a.group.position.x * 10) / 10, z:Math.round(a.group.position.z * 10) / 10,
+    growth:a.growth || 0, feedCount:a.feedCount || 0, isBaby:!!a.isBaby
+  }));
+}
+function syncAnimalsFromState(list){
+  if(!Array.isArray(list)) return;
+  const mine = animals.filter(a => a.kind !== "cobo");
+  list.forEach((sv, i) => {
+    let a = mine[i];
+    if(!a || a.kind !== sv.kind){
+      if(sv.kind === "chicken") a = buildChicken(sv.x || 0, sv.z || 0, 0xffffff);
+      else if(sv.kind === "sheep") a = buildSheep(sv.x || 0, sv.z || 0);
+      else if(sv.kind === "rabbit") a = buildRabbit(sv.x || 0, sv.z || 0);
+      if(a) mine.push(a);
+    } else if(sv.x != null){ a.group.position.x = sv.x; a.group.position.z = sv.z; }
+    if(a){ a.feedCount = sv.feedCount || 0; a.isBaby = !!sv.isBaby; applyGrowthScale(a); }
+  });
+}
+
+/* ---- 집 외관 ---- */
+function houseDisplayName(){ return (houseCustom.name || "").trim() || (profile.name + "의 집"); }
+function hexNum(css){ return parseInt(String(css).slice(1), 16); }
+function buildCustomHouse(){
+  if(houseGroup){
+    scene.remove(houseGroup);
+    const ix = interactives.findIndex(i => i.root === houseGroup);
+    if(ix >= 0) interactives.splice(ix, 1);
+  }
+  BUILDINGS.house.name = houseDisplayName();
+  const o = { x:-19, z:12, w:6, d:5, h:3.2 };
+  const g = new THREE.Group(); g.position.set(o.x, 0, o.z); scene.add(g);
+  box(o.w, o.h, o.d, hexNum(houseCustom.wall), 0, o.h / 2, 0, g);
+  const roofC = 0xe86a5e;
+  if(houseCustom.roof === "tri"){ const rf = cone(Math.max(o.w, o.d) * 0.78, o.h * 0.62, roofC, 0, o.h + o.h * 0.3, 0, g, 4); rf.rotation.y = Math.PI / 4; }
+  else if(houseCustom.roof === "flat"){ box(o.w + 0.6, 0.35, o.d + 0.6, roofC, 0, o.h + 0.17, 0, g); }
+  else if(houseCustom.roof === "round"){ const d = sph(Math.max(o.w, o.d) * 0.62, roofC, 0, o.h + 0.1, 0, g, 14, 8); d.scale.y = 0.55; }
+  else { cone(Math.max(o.w, o.d) * 0.62, o.h * 1.05, roofC, 0, o.h + o.h * 0.5, 0, g, 8); }
+  box(1.3, 2.2, 0.16, hexNum(houseCustom.door), 0, 1.1, o.d / 2 + 0.06, g);
+  sph(0.07, 0xffc93d, 0.38, 1.1, o.d / 2 + 0.16, g, 8, 8);
+  box(1.9, 0.16, 1, 0xd9c491, 0, 0.08, o.d / 2 + 0.5, g);
+  [-o.w / 4 - 0.4, o.w / 4 + 0.4].forEach(wx => {
+    if(houseCustom.window === "square") box(1.1, 1.1, 0.12, 0xbfe8ff, wx, o.h * 0.58, o.d / 2 + 0.05, g);
+    else if(houseCustom.window === "round"){ const c = new THREE.Mesh(new THREE.CircleGeometry(0.55, 16), mat(0xbfe8ff)); c.position.set(wx, o.h * 0.58, o.d / 2 + 0.06); g.add(c); }
+    else { box(1.1, 0.8, 0.12, 0xbfe8ff, wx, o.h * 0.5, o.d / 2 + 0.05, g); const h = sph(0.55, 0xbfe8ff, wx, o.h * 0.5 + 0.4, o.d / 2 + 0.05, g, 12, 8); h.scale.y = 0.6; }
+  });
+  if(houseCustom.chimney) box(0.7, 1.6, 0.7, 0x9b8d7d, o.w / 4, o.h + 0.9, -o.d / 4, g);
+  const fenceC = hexNum(houseCustom.fence);
+  for(let fx = -4.4; fx <= 4.4; fx += 1.1){ if(Math.abs(fx) < 1.2) continue; box(0.14, 0.9, 0.14, fenceC, fx, 0.45, o.d / 2 + 2.2, g); }
+  box(9, 0.12, 0.12, fenceC, 0, 0.75, o.d / 2 + 2.2, g);
+  const sign = makeLabel("🏠 " + houseDisplayName(), "#ff9f2e");
+  sign.position.set(0, o.h + o.h * 0.62 + 1, 0); g.add(sign);
+  registerInteractive(g, "building", { bid:"house" }, [hitBox(o.w + 0.5, o.h + 1.8, o.d + 0.5, g)]);
+  houseGroup = g;
+  return g;
+}
+function applyHouseCustom(force){
+  const sig = JSON.stringify(houseCustom);
+  if(!force && sig === lastHouseSig) return;
+  lastHouseSig = sig;
+  buildCustomHouse();
+}
+function petScale(){
+  let m = 0;
+  animals.forEach(a => { if(a.kind !== "cobo") m = Math.max(m, a.growth || 0); });
+  return 1 + 0.12 * m;
+}
+function buildCustomPetHouse(){
+  if(petHouseGroup){
+    scene.remove(petHouseGroup);
+    const ix = interactives.findIndex(i => i.root === petHouseGroup);
+    if(ix >= 0) interactives.splice(ix, 1);
+  }
+  const g = new THREE.Group(); g.position.set(24, 0, 2); scene.add(g);
+  box(4.5, 2.6, 4, hexNum(petHouseCustom.wall), 0, 1.3, 0, g);
+  if(petHouseCustom.roof === "tri"){ const rf = cone(3.5, 1.6, 0x8a5a2b, 0, 3.4, 0, g, 4); rf.rotation.y = Math.PI / 4; }
+  else if(petHouseCustom.roof === "flat"){ box(5.1, 0.3, 4.6, 0x8a5a2b, 0, 2.75, 0, g); }
+  else { const d = sph(2.8, 0x8a5a2b, 0, 2.7, 0, g, 14, 8); d.scale.y = 0.55; }
+  box(1.1, 1.8, 0.16, 0x7a4326, 0, 0.9, 2.06, g);
+  box(1, 1, 0.12, 0xbfe8ff, -1.3, 1.5, 2.05, g);
+  box(1, 1, 0.12, 0xbfe8ff, 1.3, 1.5, 2.05, g);
+  const sign = makeLabel("🐾 동물 집", "#e08a4c");
+  sign.position.set(0, 4.6, 0); g.add(sign);
+  registerInteractive(g, "building", { bid:"pethouse" }, [hitBox(5, 4.4, 4.5, g)]);
+  petHouseGroup = g;
+  petHouseGroup.scale.setScalar(petScale());
+  return g;
+}
+function rebuildPetHouse(){ buildCustomPetHouse(); }
+function onGrowthChange(){
+  if(petHouseGroup) petHouseGroup.scale.setScalar(petScale());
+  if(houseBedTop){
+    let tot = 0, n = 0;
+    animals.forEach(a => { if(a.kind !== "cobo"){ tot += (a.growth || 0); n++; } });
+    const avg = n ? tot / n : 0;
+    houseBedTop.scale.setScalar(1 + 0.15 * avg);
+  }
+}
+
+/* ---- 집 안 가구 ---- */
+function buildFurnMesh(type, x, z){
+  const g = new THREE.Group(); g.position.set(x, 0, z);
+  if(type === "chair"){
+    box(0.9, 0.12, 0.9, 0xa9743f, 0, 0.55, 0, g);
+    box(0.9, 0.9, 0.12, 0xa9743f, 0, 1.0, -0.4, g);
+    [[-0.35, -0.35], [0.35, -0.35], [-0.35, 0.35], [0.35, 0.35]].forEach(o => cyl(0.05, 0.05, 0.55, 0x7a4326, o[0], 0.28, o[1], g, 6));
+  } else if(type === "desk"){
+    box(1.6, 0.1, 1.0, 0xbc8650, 0, 0.78, 0, g);
+    [[-0.7, -0.4], [0.7, -0.4], [-0.7, 0.4], [0.7, 0.4]].forEach(o => box(0.09, 0.78, 0.09, 0x7a4326, o[0], 0.39, o[1], g));
+    box(0.4, 0.3, 0.3, 0xe84c3d, -0.4, 0.98, 0, g);
+  } else if(type === "plant"){
+    cyl(0.32, 0.4, 0.5, 0xc0523f, 0, 0.25, 0, g, 10);
+    sph(0.45, 0x58b368, 0, 0.8, 0, g, 9, 8);
+    sph(0.3, 0x6fc46a, 0.25, 0.65, 0.15, g, 8, 8);
+  } else if(type === "rug"){
+    const r = new THREE.Mesh(new THREE.CircleGeometry(1.1, 18), mat(0xb388ff));
+    r.rotation.x = -Math.PI / 2; r.position.y = 0.07; g.add(r);
+  } else if(type === "lamp"){
+    cyl(0.25, 0.3, 0.12, 0x7a4326, 0, 0.06, 0, g, 10);
+    cyl(0.05, 0.05, 1.2, 0x7a4326, 0, 0.7, 0, g, 6);
+    cone(0.4, 0.5, 0xffc93d, 0, 1.45, 0, g, 10);
+  } else if(type === "shelf"){
+    box(1.8, 2.2, 0.5, 0x8a5a2b, 0, 1.1, 0, g);
+    [0xe84c3d, 0xf6c945, 0x4da3ff, 0x58b368].forEach((c, i) => box(0.3, 0.7, 0.3, c, -0.6 + i * 0.4, 1.7, 0.1, g));
+  }
+  return g;
+}
+function rebuildHouseFurn(){
+  if(!houseFurnGroup){ houseFurnGroup = new THREE.Group(); scene.add(houseFurnGroup); }
+  while(houseFurnGroup.children.length) houseFurnGroup.remove(houseFurnGroup.children[0]);
+  houseFurn.forEach(f => { const s = HOUSE_FURN_SLOTS[f.slot]; if(!s) return; houseFurnGroup.add(buildFurnMesh(f.type, s[0], s[1])); });
+}
+function openFurnShop(){
+  $id("furnCoins").textContent = S.coins;
+  const list = $id("furnList"); list.innerHTML = "";
+  FURN_ITEMS.forEach(it => {
+    const owned = houseFurn.filter(f => f.type === it.id);
+    const row = document.createElement("div"); row.className = "row";
+    row.innerHTML = '<span class="em">' + it.em + '</span><div class="info"><div class="name">' + it.name + '</div><div class="desc">집 안에 놓여요 · 지금 ' + owned.length + '개 있어요</div></div><span class="price">🪙 ' + it.price + '</span>';
+    const b = document.createElement("button"); b.className = "btn green"; b.textContent = "사기";
+    b.style.cssText = "min-height:48px; padding:8px 16px; font-size:19px;";
+    b.addEventListener("click", () => {
+      const freeSlot = HOUSE_FURN_SLOTS.findIndex((s, i) => !houseFurn.some(f => f.slot === i));
+      if(freeSlot < 0){ toast("🛋️ 집 안에 둘 자리가 없어요!"); return; }
+      if(S.coins < it.price){ toast("😢 코인이 부족해요! " + it.name + " 가격 " + it.price + "코인인데, 지금 " + S.coins + "코인 있어요"); sndBad(); return; }
+      S.coins -= it.price;
+      houseFurn.push({ type:it.id, slot:freeSlot });
+      rebuildHouseFurn(); sndCoin(); updateHUD();
+      toast("🎉 " + it.name + "을(를) 샀어요! 집 안에 놓였어요!");
+      afterAction("furn", { item:it.id }); autosave(); openFurnShop();
+    });
+    row.appendChild(b);
+    if(owned.length){
+      const rm = document.createElement("button"); rm.className = "btn"; rm.textContent = "치우기";
+      rm.style.cssText = "min-height:48px; padding:8px 12px; font-size:18px;";
+      rm.addEventListener("click", () => {
+        const idx = houseFurn.findIndex(f => f.type === it.id);
+        if(idx >= 0) houseFurn.splice(idx, 1);
+        rebuildHouseFurn(); toast("🧹 " + it.name + "을(를) 치웠어요!"); afterAction("furnRm", { item:it.id }); autosave(); openFurnShop();
+      });
+      row.appendChild(rm);
+    }
+    list.appendChild(row);
+  });
+  $id("furnModal").hidden = false; sndPop();
+}
+
+/* ---- 동물 집 꾸미기 ---- */
+function buildPetDecorMesh(type, x, z){
+  const g = new THREE.Group(); g.position.set(x, 0, z);
+  if(type === "bed"){
+    box(2.2, 0.5, 1.6, 0x8a5a2b, 0, 0.25, 0, g);
+    box(2.1, 0.3, 1.5, 0xff9ecb, 0, 0.6, 0, g);
+  } else if(type === "bowl"){
+    cyl(0.5, 0.4, 0.35, 0x4da3ff, 0, 0.18, 0, g, 12);
+    sph(0.3, 0x8a5a2b, 0, 0.4, 0, g, 8, 8);
+  } else if(type === "toy"){
+    sph(0.45, 0xff6b81, 0, 0.45, 0, g, 12, 10);
+    sph(0.45, 0xffffff, 0, 0.45, 0, g, 12, 10).scale.set(1, 0.4, 1);
+  } else if(type === "mat"){
+    const r = new THREE.Mesh(new THREE.CircleGeometry(1.2, 18), mat(0xffd166));
+    r.rotation.x = -Math.PI / 2; r.position.y = 0.07; g.add(r);
+  }
+  return g;
+}
+function rebuildPetHouseDecor(){
+  if(!petDecorGroup){ petDecorGroup = new THREE.Group(); scene.add(petDecorGroup); }
+  while(petDecorGroup.children.length) petDecorGroup.remove(petDecorGroup.children[0]);
+  petHouseDecor.forEach(d => { const s = PET_DECOR_SLOTS[d.type]; if(!s) return; petDecorGroup.add(buildPetDecorMesh(d.type, s[0], s[1])); });
+}
+function openPetHouseDecor(){
+  $id("petCoins").textContent = S.coins;
+  const list = $id("petDecorList"); list.innerHTML = "";
+  PET_DECOR_ITEMS.forEach(it => {
+    const owned = petHouseDecor.some(d => d.type === it.id);
+    const row = document.createElement("div"); row.className = "row";
+    row.innerHTML = '<span class="em">' + it.em + '</span><div class="info"><div class="name">' + it.name + '</div><div class="desc">' + (owned ? "동물 집 안에 있어요!" : "동물 집 안에 놓여요") + '</div></div><span class="price">🪙 ' + it.price + '</span>';
+    if(!owned){
+      const b = document.createElement("button"); b.className = "btn green"; b.textContent = "사기";
+      b.style.cssText = "min-height:48px; padding:8px 16px; font-size:19px;";
+      b.addEventListener("click", () => {
+        if(S.coins < it.price){ toast("😢 코인이 부족해요! " + it.name + " 가격 " + it.price + "코인인데, 지금 " + S.coins + "코인 있어요"); sndBad(); return; }
+        S.coins -= it.price;
+        petHouseDecor.push({ type:it.id });
+        rebuildPetHouseDecor(); sndCoin(); updateHUD();
+        toast("🎉 " + it.name + "을(를) 샀어요! 동물 집 안에 놓였어요!");
+        afterAction("petDecor", { item:it.id }); autosave(); openPetHouseDecor();
+      });
+      row.appendChild(b);
+    } else {
+      const rm = document.createElement("button"); rm.className = "btn"; rm.textContent = "치우기";
+      rm.style.cssText = "min-height:48px; padding:8px 12px; font-size:18px;";
+      rm.addEventListener("click", () => {
+        const idx = petHouseDecor.findIndex(d => d.type === it.id);
+        if(idx >= 0) petHouseDecor.splice(idx, 1);
+        rebuildPetHouseDecor(); toast("🧹 " + it.name + "을(를) 치웠어요!"); afterAction("petDecorRm", { item:it.id }); autosave(); openPetHouseDecor();
+      });
+      row.appendChild(rm);
+    }
+    list.appendChild(row);
+  });
+  $id("petModal").hidden = false; sndPop();
+}
+
+/* ---- 편의점 ---- */
+function openStore(){ renderStore(); $id("storeModal").hidden = false; sndPop(); }
+function renderStore(){
+  $id("storeCoins").textContent = S.coins;
+  const list = $id("storeList"); list.innerHTML = "";
+  STORE_ITEMS.forEach(it => {
+    const row = document.createElement("div"); row.className = "row";
+    row.innerHTML = '<span class="em">' + it.em + '</span><div class="info"><div class="name">' + it.name + '</div><div class="desc">' + it.desc + '</div></div><span class="price">🪙 ' + it.price + '</span>';
+    const b = document.createElement("button"); b.className = "btn green"; b.textContent = "사기";
+    b.style.cssText = "min-height:48px; padding:8px 16px; font-size:19px;";
+    b.addEventListener("click", () => buyStoreItem(it));
+    row.appendChild(b);
+    list.appendChild(row);
+  });
+}
+function buyStoreItem(it){
+  if(S.coins < it.price){ toast("😢 코인이 부족해요! " + it.name + " 가격 " + it.price + "코인인데, 지금 " + S.coins + "코인 있어요"); sndBad(); return; }
+  if(it.kind === "animal"){
+    const count = animals.filter(a => a.kind === it.animal).length;
+    if(count >= 8){ toast("🐣 " + it.name + "은(는) 이미 8마리나 있어요!"); return; }
+    const spots = { chicken:[-13.5, -6], sheep:[11, -8], rabbit:[8, 38] };
+    const sp = spots[it.animal];
+    let b = null;
+    if(it.animal === "chicken") b = buildChicken(sp[0] + rand(-1, 1), sp[1] + rand(-1, 1), 0xffffff);
+    else if(it.animal === "sheep") b = buildSheep(sp[0] + rand(-1, 1), sp[1] + rand(-1, 1));
+    else b = buildRabbit(sp[0] + rand(-1, 1), sp[1] + rand(-1, 1));
+    if(!b) return;
+    b.isBaby = true; b.feedCount = 0; applyGrowthScale(b);
+    S.coins -= it.price;
+    toast("🎉 " + it.name + "을(를) 샀어요! 밥을 주면 쑥쑥 커요!");
+  } else if(it.kind === "feed"){ S.bag.feed = (S.bag.feed || 0) + 1; S.coins -= it.price; toast("🍚 동물 밥 1개를 샀어요!"); }
+  else if(it.kind === "feed5"){ S.bag.feed = (S.bag.feed || 0) + 5; S.coins -= it.price; toast("🍚 동물 밥 5개를 샀어요!"); }
+  else if(it.kind === "snack"){ S.bag[it.id] = (S.bag[it.id] || 0) + 1; S.coins -= it.price; toast(it.em + " " + it.name + "을(를) 샀어요! 가방에서 먹을 수 있어요!"); }
+  sndCoin(); updateHUD(); renderStore(); afterAction("storeBuy", { item:it.id }); autosave();
+}
+
+/* ---- 내 집 꾸미기 화면 ---- */
+function swatchRow(el, options, cur, fn){
+  el.innerHTML = "";
+  options.forEach(pair => {
+    const val = pair[0], label = pair[1];
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "btn" + (String(val) === String(cur) ? " green" : "");
+    b.textContent = label;
+    b.style.cssText = "min-height:48px; min-width:56px; padding:8px 12px; font-size:19px; margin:3px;";
+    if(/^#/.test(val)){ b.style.background = val; b.style.color = "#54401f"; b.style.border = "3px solid " + (String(val) === String(cur) ? "#58b368" : "#e8cf96"); }
+    b.addEventListener("click", () => { fn(val); renderHouseCustom(); sndPop(); });
+    el.appendChild(b);
+  });
+}
+function renderHouseCustom(){
+  $id("houseNameInput").value = houseCustom.name || "";
+  swatchRow($id("houseWalls"), HOUSE_WALLS, houseCustom.wall, v => { houseCustom.wall = v; applyHouseCustom(true); afterAction("house", {}); autosave(); });
+  swatchRow($id("houseRoofs"), ROOFS, houseCustom.roof, v => { houseCustom.roof = v; applyHouseCustom(true); afterAction("house", {}); autosave(); });
+  swatchRow($id("houseWindows"), WINDOWS, houseCustom.window, v => { houseCustom.window = v; applyHouseCustom(true); afterAction("house", {}); autosave(); });
+  swatchRow($id("houseDoors"), HOUSE_DOORS, houseCustom.door, v => { houseCustom.door = v; applyHouseCustom(true); afterAction("house", {}); autosave(); });
+  swatchRow($id("houseFences"), HOUSE_FENCES, houseCustom.fence, v => { houseCustom.fence = v; applyHouseCustom(true); afterAction("house", {}); autosave(); });
+  const ch = $id("houseChimney"); ch.innerHTML = "";
+  [["on", "🏭 굴뚝 있어요"], ["off", "🚫 굴뚝 없어요"]].forEach(pair => {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = "btn" + ((houseCustom.chimney ? "on" : "off") === pair[0] ? " green" : "");
+    b.textContent = pair[1];
+    b.style.cssText = "min-height:48px; padding:8px 12px; font-size:19px; margin:3px;";
+    b.addEventListener("click", () => { houseCustom.chimney = (pair[0] === "on"); applyHouseCustom(true); afterAction("house", {}); autosave(); renderHouseCustom(); sndPop(); });
+    ch.appendChild(b);
+  });
+  swatchRow($id("petWalls"), PET_WALLS, petHouseCustom.wall, v => { petHouseCustom.wall = v; rebuildPetHouse(); afterAction("house", {}); autosave(); });
+  swatchRow($id("petRoofs"), ROOFS.slice(0, 3), petHouseCustom.roof, v => { petHouseCustom.roof = v; rebuildPetHouse(); afterAction("house", {}); autosave(); });
+}
+function openHouseCustom(){
+  renderHouseCustom();
+  $id("houseModal").hidden = false; sndPop();
+}
+$id("houseNameBtn").addEventListener("click", () => {
+  houseCustom.name = $id("houseNameInput").value.trim().slice(0, 10);
+  applyHouseCustom(true); afterAction("house", {}); autosave();
+  toast("🏠 집 이름이 '" + houseDisplayName() + "'이 되었어요!");
+  renderHouseCustom();
+});
+$id("houseFurnBtn").addEventListener("click", () => { $id("houseModal").hidden = true; openFurnShop(); });
+
+/* ---- 책 읽기 ---- */
+function openReadBook(){
+  $id("readStory").textContent = READ_STORY;
+  const q = $id("readQuiz"); q.innerHTML = "";
+  const t = document.createElement("p");
+  t.style.cssText = "font-size:20px; font-weight:700; margin:12px 0 6px;";
+  t.textContent = "❓ 토끼 토토가 숲에서 만난 친구는 누구일까요?";
+  q.appendChild(t);
+  ["여우", "다람쥐 도리", "곰"].forEach(ans => {
+    const b = document.createElement("button");
+    b.className = "btn"; b.textContent = ans;
+    b.style.cssText = "min-height:48px; font-size:19px; margin:4px;";
+    b.addEventListener("click", () => {
+      if(ans === "다람쥐 도리"){ addStars(1); toast("🎉 정답! ⭐+1 다람쥐 도리가 도와줬어요!"); sndGood(); $id("readModal").hidden = true; afterAction("read", {}); autosave(); }
+      else { toast("🤔 다시 생각해 봐요! 힌트: 도토리를 좋아하는 친구예요!"); sndBad(); }
+    });
+    q.appendChild(b);
+  });
+  $id("readModal").hidden = false; sndPop();
+}
+
+/* ---- 침대 눕기 ---- */
+function lieDown(){
+  if(!indoor || indoor.id !== "house" || !player || lyingDown) return;
+  lyingDown = true; lieTimer = 2;
+  walkTarget = null;
+  player.group.position.set(INTERIORS.house.cx - 4.4, 0, INTERIORS.house.cz - 3.6);
+  player.group.rotation.set(0, 0, 0);
+  player.group.rotation.x = -Math.PI / 2;
+  showBubble("me", "💤 쿨쿨...", () => player.group.position);
+  toast("😴 침대에 누웠어요! 행복도가 올라가요…");
+  const lb = $id("lieBtn"); if(lb) lb.hidden = false;
+  sndFX("dingdong");
+}
+function standUp(silent){
+  if(!lyingDown) return;
+  lyingDown = false;
+  if(player){ player.group.rotation.x = 0; player.group.position.y = 0; }
+  const lb = $id("lieBtn"); if(lb) lb.hidden = true;
+  if(!silent) toast("☀️ 일어났어요! 개운해요!");
+}
+
+/* ---- 산책 ---- */
+function nearestAnimal(){
+  if(!player) return null;
+  let best = null, bd = 1e9;
+  animals.forEach(a => {
+    if(a.kind === "cobo") return;
+    const d = Math.hypot(a.group.position.x - player.group.position.x, a.group.position.z - player.group.position.z);
+    if(d < bd){ bd = d; best = a; }
+  });
+  return best;
+}
+function startWalk(a){
+  if(indoor){ toast("🏃 밖에 나가서 산책해요!"); return; }
+  walkBuddy = a || nearestAnimal();
+  if(!walkBuddy){ toast("🐾 산책할 동물이 없어요!"); return; }
+  walkBuddy._origSpeed = walkBuddy.speed;
+  walkBuddy.speed = 3.4;
+  walkMode = true; walkGatherT = 0;
+  const nm = walkBuddy.kind === "chicken" ? "닭" : (walkBuddy.kind === "sheep" ? "양" : "토끼");
+  toast("🐾 " + nm + "와(과) 산책해요! 놀이터에 가면 동물들이 모여서 놀아요!");
+  sndJump();
+}
+function toggleWalk(){
+  if(walkMode){
+    walkMode = false;
+    if(walkBuddy && walkBuddy._origSpeed) walkBuddy.speed = walkBuddy._origSpeed;
+    walkBuddy = null;
+    toast("🐾 산책을 마쳤어요! 동물들이 집으로 돌아가요!");
+  } else startWalk();
+}
+function tickWalk(dt, t){
+  if(!walkMode || !player) return;
+  const pp = player.group.position;
+  if(walkBuddy && walkBuddy.group){
+    const bp = walkBuddy.group.position;
+    const dx = pp.x - bp.x, dz = pp.z - bp.z, d = Math.hypot(dx, dz);
+    if(d > 2.4){ walkBuddy.target.set(pp.x - dx / d * 2, 0, pp.z - dz / d * 2); walkBuddy.state = "walk"; walkBuddy.timer = 3; }
+    else if(Math.random() < 0.02) walkBuddy.hopT = 0.4;
+  }
+  const nearPlay = Math.hypot(pp.x - 25, pp.z - 20) < 14 || Math.hypot(pp.x - 38, pp.z - 6) < 12;
+  walkGatherT -= dt;
+  if(nearPlay && walkGatherT <= 0){
+    walkGatherT = 4;
+    animals.forEach((a, i) => {
+      if(a === walkBuddy || a.kind === "cobo") return;
+      const ang = (i / Math.max(1, animals.length)) * Math.PI * 2;
+      a.target.set(pp.x + Math.cos(ang) * 3, 0, pp.z + Math.sin(ang) * 3);
+      a.state = "walk"; a.timer = 4;
+      a.hopT = 0.5;
+    });
+    addHappiness(1);
+  }
+}
+
+/* ---- 소셜: 초대 / 친구 집 방문 ---- */
+function inviteFriend(npc, silent){
+  if(!npc) return;
+  if(invitedNpc && invitedNpc !== npc) invitedNpc.invited = false;
+  invitedNpc = npc; npc.invited = true;
+  if(!silent) toast("🏠 " + npc.def.name + "을(를) 내 집으로 초대했어요! 집 문 앞에서 만나요!");
+  afterAction("invite", { npc:npc.def.id });
+  autosave();
+}
+function visitFriendHouse(npc){
+  if(!npc) return;
+  visitingNpc = npc;
+  toast("🏠 " + npc.def.name + "의 집에 놀러 가요!");
+  enterBuilding("friendhouse");
+}
+
+
 return {
   buildWorld:buildWorld, frame:frame, panelFor:panelFor, onGroundTap:onGroundTap,
   afterAction:afterAction, applySave:applySave, onGameBegin:onGameBegin,
   save:save, openMinigames:openMinigames, setDecorMode:setDecorMode, sndFX:sndFX,
-  enterBuilding:enterBuilding, exitBuilding:exitBuilding, startTag:startTag, startRide:startRide
+  enterBuilding:enterBuilding, exitBuilding:exitBuilding, startTag:startTag, startRide:startRide,
+  startWalk:startWalk, onGrowthChange:onGrowthChange, openStore:openStore, openHouseCustom:openHouseCustom,
+  openFurnShop:openFurnShop, openPetHouseDecor:openPetHouseDecor, openReadBook:openReadBook,
+  toggleWalk:toggleWalk, lieDown:lieDown, standUp:standUp,
+  inviteFriendById:id => { const n = npcs.find(x => x.def.id === id); if(n) inviteFriend(n); },
+  visitFriendHouseById:id => { const n = npcs.find(x => x.def.id === id); if(n) visitFriendHouse(n); },
+  debugState:() => ({ houseCustom, petHouseCustom, houseFurn, petHouseDecor, walkMode, lyingDown,
+    invitedNpc:invitedNpc ? invitedNpc.def.id : null, indoor:indoor ? indoor.id : null,
+    player:!!player, houseName:BUILDINGS.house.name, npcs:npcs.map(n => n.def.id) })
 };
 })();
 </script>
